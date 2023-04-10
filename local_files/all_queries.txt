@@ -1,0 +1,630 @@
+-- creating tables(lab2)
+
+/* Запрос для создания реляционной таблицы supplier(Поставщик) */
+CREATE TABLE supplier (
+	id SERIAL PRIMARY KEY, -- Уникальный идентификатор поставщика
+	name varchar(255), -- Название поставщика
+	city varchar(255), -- Город поставщика
+	address varchar(255), -- Адрес поставщика
+	rating smallint, -- Рейтинг поставщика
+	-- reliable boolean GENERATED ALWAYS AS (rating >= 6) STORED -- Показатель, является ли поставщик надежным
+	reliability varchar(30)
+);
+
+/* Запрос для создания реляционной таблицы detail(Деталь) */
+CREATE TABLE detail (
+	id SERIAL PRIMARY KEY, -- Уникальный идентификатор детали
+	name varchar(255), -- Название детали
+	price integer, -- Цена детали
+	weight integer, -- Вес детали
+	color varchar(255), -- Цвет детали
+	-- expensive bool GENERATED ALWAYS AS (price >= 1000) STORED, -- Является ли деталь дорогой
+	expensiveness varchar(30),
+	supplier_id integer REFERENCES supplier(id) NOT NULL -- Уникальный идентификатор поставщика данной детали
+);
+
+/* Запрос для создания реляционной таблицы project(Проект) */
+CREATE TABLE project (
+	id SERIAL PRIMARY KEY, -- Уникальный идентификатор проекта
+	name varchar(255), -- Наименование проекта
+	city varchar(255), -- Город, в котором реализуется проект
+	address varchar(255), -- Адрес проекта
+	budget integer, -- Бюджет проекта
+	outcomes integer -- РАсходы проекта(на поставки)
+);
+
+/* Запрос для создания реляционной таблицы delivery(Поставка) */
+CREATE TABLE delivery (
+	id SERIAL PRIMARY KEY, -- Уникальный идентификатор поставки
+	price integer, -- Стоимость поставки
+	project_id integer REFERENCES project(id) NOT NULL /* Уникальный идентификатор проекта, 
+	которому адресована данная поставка */
+);
+
+
+/* Запрос для создания реляционной таблицы detail_delivery
+(Связующая таблица для реализации связи между поставками и деталями) */
+CREATE TABLE detail_delivery (
+	delivery_id integer REFERENCES delivery(id) NOT NULL, -- Уникальный идентификатор поставки
+	detail_id integer REFERENCES detail(id) NOT NULL, -- Уникальный идентификатор детали
+	detail_quantity integer -- Количество экземпляров детали с данным detail_id в поставке с delivery_id
+);
+
+-- adding constraints and creating some triggers(lab3)
+
+ALTER TABLE supplier
+	ALTER COLUMN name SET NOT NULL,
+	ALTER COLUMN city SET NOT NULL,
+	ALTER COLUMN address SET NOT NULL,
+	ALTER COLUMN rating SET NOT NULL,
+	ALTER COLUMN reliability SET NOT NULL;
+ALTER TABLE supplier 
+	ADD CHECK (1 <= rating and rating <= 10);
+ALTER TABLE supplier
+	ALTER COLUMN address SET DEFAULT 'Неизвестен';
+ALTER TABLE supplier 
+	ADD UNIQUE (name, city);
+
+ALTER TABLE detail 
+	ALTER COLUMN name SET NOT NULL,
+	ALTER COLUMN price SET NOT NULL,
+	ALTER COLUMN weight SET NOT NULL,
+	ALTER COLUMN color SET NOT NULL,
+	ALTER COLUMN expensiveness SET NOT NULL;
+ALTER TABLE detail 
+	ADD CHECK (price > 0),
+	ADD CHECK (weight > 0);
+
+CREATE TYPE colors AS ENUM ('белый', 'черный', 'красный', 'синий', 'серый', 'зеленый', 'желтый', 'оранжевый');
+ALTER TABLE detail 
+	ALTER COLUMN color SET DATA TYPE colors USING color::colors;
+
+ALTER TABLE detail
+	DROP CONSTRAINT detail_supplier_id_fkey;
+ALTER TABLE detail
+	ADD CONSTRAINT detail_supplier_id_fkey_cascade
+	FOREIGN KEY (supplier_id) REFERENCES supplier(id) ON UPDATE CASCADE ON DELETE CASCADE;
+
+ALTER TABLE project
+	ALTER COLUMN name SET NOT NULL,
+	ALTER COLUMN city SET NOT NULL,
+	ALTER COLUMN address SET NOT NULL,
+	ALTER COLUMN budget SET NOT NULL,
+	ALTER COLUMN outcomes SET NOT NULL,
+	ALTER COLUMN outcomes SET DEFAULT 0;
+ALTER TABLE project 
+	ADD CHECK (budget > 0),
+	ADD CHECK (outcomes >= 0);
+
+ALTER TABLE delivery 
+	ALTER COLUMN price SET NOT NULL,
+	ALTER COLUMN price SET DEFAULT 0;
+ALTER TABLE delivery ADD CHECK (price >= 0);
+
+ALTER TABLE delivery 
+	DROP CONSTRAINT delivery_project_id_fkey;
+
+ALTER TABLE delivery 
+	ADD CONSTRAINT delivery_project_id_fkey_cascade
+	FOREIGN KEY (project_id) REFERENCES project(id) ON UPDATE CASCADE ON DELETE CASCADE;
+
+ALTER TABLE detail_delivery ADD CHECK (detail_quantity > 0);
+ALTER TABLE detail_delivery ALTER COLUMN detail_quantity SET NOT NULL;
+
+ALTER TABLE detail_delivery
+	DROP CONSTRAINT detail_delivery_delivery_id_fkey,
+	DROP CONSTRAINT detail_delivery_detail_id_fkey;
+
+ALTER TABLE detail_delivery
+	ADD CONSTRAINT detail_delivery_delivery_id_fkey_cascade
+	FOREIGN KEY (delivery_id) REFERENCES delivery(id) ON UPDATE CASCADE ON DELETE CASCADE,
+	ADD CONSTRAINT detail_delivery_detail_id_fkey_cascade
+	FOREIGN KEY (detail_id) REFERENCES detail(id) ON UPDATE CASCADE ON DELETE CASCADE;
+
+
+CREATE OR REPLACE FUNCTION set_reliability() RETURNS TRIGGER AS $set_reliability$
+	BEGIN 
+		IF (NEW.rating >= 6) THEN 
+			NEW.reliability := 'Надежный';
+		ELSE
+			NEW.reliability := 'Ненадежный';
+		END IF;
+		RETURN NEW;
+	END;
+	
+$set_reliability$ LANGUAGE plpgsql;
+
+CREATE TRIGGER set_reliablity BEFORE INSERT OR UPDATE ON supplier
+	FOR EACH ROW EXECUTE PROCEDURE set_reliability();
+
+
+CREATE OR REPLACE FUNCTION set_expensiveness() RETURNS TRIGGER AS $set_expensiveness$
+	BEGIN 
+		IF (NEW.price < 1000) THEN 
+			NEW.expensiveness := 'Дешевая';
+		ELSE
+			NEW.expensiveness := 'Дорогая';
+		END IF;
+		RETURN NEW;
+	END;
+	
+$set_expensiveness$ LANGUAGE plpgsql;
+
+CREATE TRIGGER set_expensiveness BEFORE INSERT OR UPDATE ON detail
+	FOR EACH ROW EXECUTE PROCEDURE set_expensiveness();
+
+-- triggers' development(lab8)
+
+CREATE FUNCTION check_matching_of_features() RETURNS TRIGGER AS $check_matching_of_features$
+	BEGIN 
+		IF NEW.price >= 1000 and (
+			SELECT reliability
+			FROM supplier
+			WHERE supplier.id = NEW.supplier_id
+		) = 'Ненадежный' THEN
+			RAISE EXCEPTION 'Ненадежный поставщик не может поставлять дорогую деталь';
+		END IF;
+		RETURN NEW;
+	END;
+	
+$check_matching_of_features$ LANGUAGE plpgsql;
+
+CREATE TRIGGER check_matching_of_features BEFORE INSERT OR UPDATE ON detail
+	FOR EACH ROW EXECUTE PROCEDURE check_matching_of_features();
+
+
+CREATE FUNCTION check_delivery_weight() RETURNS TRIGGER AS $check_delivery_weight$
+	BEGIN 
+		IF (SELECT SUM(detail.weight * detail_delivery.detail_quantity / 1000000) AS delivery_weight
+			FROM delivery
+			INNER JOIN detail_delivery ON detail_delivery.delivery_id = delivery.id
+			INNER JOIN detail ON detail.id = detail_delivery.detail_id
+			GROUP BY delivery.id
+			HAVING delivery.id = NEW.id
+		   ) > 5 THEN
+		   		RAISE EXCEPTION 'Вес поставки не может быть более 5 тонн';
+		END IF;
+		RETURN NEW;
+	END;
+	
+$check_delivery_weight$ LANGUAGE plpgsql;
+
+CREATE TRIGGER check_delivery_weight BEFORE INSERT OR UPDATE ON delivery
+	FOR EACH ROW EXECUTE PROCEDURE check_delivery_weight();
+
+
+CREATE FUNCTION check_delivery_price() RETURNS TRIGGER AS $check_delivery_price$
+	BEGIN 
+		IF (SELECT SUM(delivery.price)
+			FROM delivery
+			INNER JOIN project ON delivery.project_id = project.id
+			GROUP BY project.id
+			HAVING project.id = NEW.id
+		) > NEW.budget THEN
+				RAISE EXCEPTION 'Стоимость всех поставок проекта не может быть больше его бюджета';
+		END IF;
+		RETURN NEW;
+	END;
+	
+$check_delivery_price$ LANGUAGE plpgsql;
+
+CREATE TRIGGER check_delivery_price BEFORE INSERT OR UPDATE ON project
+	FOR EACH ROW EXECUTE PROCEDURE check_delivery_price();
+
+-- creating additional attributes(additional lab1)
+
+CREATE OR REPLACE FUNCTION set_delivery_price() RETURNS TRIGGER AS $set_delivery_price$
+DECLARE 
+	tmp bigint;
+BEGIN
+	tmp := (
+		SELECT SUM(detail.price * detail_delivery.detail_quantity) 
+		FROM detail
+		INNER JOIN detail_delivery ON detail_delivery.detail_id = detail.id
+		INNER JOIN delivery ON delivery.id = detail_delivery.delivery_id
+		GROUP BY delivery.id
+		HAVING delivery.id = NEW.id
+	);
+	IF tmp IS NOT NULL THEN
+		NEW.price := tmp;
+	END IF;
+	RETURN NEW;
+END;
+
+$set_delivery_price$ LANGUAGE plpgsql;
+
+CREATE TRIGGER set_delivery_price BEFORE INSERT OR UPDATE ON delivery
+	FOR EACH ROW EXECUTE PROCEDURE set_delivery_price();
+
+
+---------------------------------------------------------------------------------
+
+
+CREATE OR REPLACE FUNCTION set_project_outcomes() RETURNS TRIGGER AS $set_project_outcomes$
+DECLARE 
+	tmp bigint;
+BEGIN
+	tmp := (
+		SELECT SUM(delivery.price)
+		FROM delivery
+		INNER JOIN project ON project.id = delivery.project_id
+		GROUP BY project.id
+		HAVING project.id = NEW.id
+	);
+	IF tmp IS NOT NULL THEN
+		NEW.outcomes := tmp;
+	END IF;
+	RETURN NEW;
+END;
+		
+$set_project_outcomes$ LANGUAGE plpgsql;
+
+CREATE TRIGGER set_project_outcomes BEFORE INSERT OR UPDATE ON project
+	FOR EACH ROW EXECUTE PROCEDURE set_project_outcomes();
+
+-- import data from csv(lab4)
+
+COPY supplier (name, city, address, rating)
+FROM 'C:\PostgreSQL_labData\supplier_data.csv' 
+DELIMITER ';' 
+CSV HEADER;
+
+COPY detail (name, price, weight, color, supplier_id) 
+FROM 'C:\PostgreSQL_labData\detail_data.csv' 
+DELIMITER ';' 
+CSV HEADER;
+
+COPY project (name, city, address, budget, outcomes)
+FROM 'C:\PostgreSQL_labData\project_data.csv' 
+DELIMITER ';' 
+CSV HEADER;
+
+COPY delivery (project_id, price) 
+FROM 'C:\PostgreSQL_labData\delivery_data.csv' 
+DELIMITER ';' 
+CSV HEADER;
+
+COPY detail_delivery (delivery_id, detail_id, detail_quantity) 
+FROM 'C:\PostgreSQL_labData\detail_delivery_data.csv' 
+DELIMITER ';' 
+CSV HEADER;
+
+-- creating views(lab5) 
+
+CREATE OR REPLACE VIEW supplier_for_the_economist AS 
+	SELECT name, city, address, rating, reliability 
+	FROM supplier
+	ORDER BY city, name, rating DESC;
+
+CREATE OR REPLACE VIEW detail_for_the_economist AS
+	SELECT name, (detail.price / 1000) as price, color, (detail.weight / 1000) as weight, expensiveness
+	FROM detail
+	ORDER BY price DESC, name, color, weight;
+
+CREATE OR REPLACE VIEW project_for_the_economist AS
+	SELECT name, city, address, budget
+	FROM project
+	ORDER BY city, name, budget DESC;
+
+CREATE OR REPLACE VIEW delivery_for_the_economist AS 
+	SELECT det.name AS detail_name, 
+	sup.city AS detail_city,
+	det.color AS detail_color,
+	det.expensiveness AS detail_expensiveness, 
+	sup.name AS supplier_name, 
+	sup.city AS supplier_city, 
+	sup.reliability AS supplier_reliability, 
+	det_del.detail_quantity AS detail_quantity, 
+	(det.weight * detail_quantity / 1000) AS delivery_weight,
+	(detail_quantity * det.price / 1000) AS delivery_price
+FROM delivery AS del
+INNER JOIN detail_delivery AS det_del ON del.id = det_del.delivery_id
+INNER JOIN detail AS det ON det.id = det_del.detail_id
+INNER JOIN supplier AS sup ON sup.id = det.supplier_id
+ORDER BY det.name, sup.name, delivery_price DESC, delivery_weight DESC;
+
+CREATE OR REPLACE VIEW supplier_for_the_director AS
+	SELECT name, city, reliability 
+	FROM supplier 
+	ORDER BY reliability, city, name;
+
+CREATE OR REPLACE VIEW detail_for_the_director AS
+	SELECT name, (detail.price / 1000) as price, color, expensiveness
+	FROM detail 
+	ORDER BY price DESC, name;
+
+CREATE OR REPLACE VIEW project_for_the_director AS
+	SELECT name, city, budget
+	FROM project 
+	ORDER BY budget DESC, city, name;
+
+CREATE OR REPLACE VIEW delivery_for_the_director AS
+SELECT det.name AS detail_name, 
+	sup.city AS detail_city,
+	det.color AS detail_color,
+	det.expensiveness AS detail_expensiveness,
+	sup.name AS supplier_name, 
+	sup.city AS supplier_city,
+	sup.reliability AS supplier_reliability,
+	det_del.detail_quantity AS detail_quantity,
+	(detail_quantity * det.weight / 1000) AS delivery_weight,
+	(detail_quantity * det.price / 1000) AS delivery_price
+FROM delivery AS del
+INNER JOIN detail_delivery AS det_del on del.id = det_del.delivery_id
+INNER JOIN detail AS det on det.id = det_del.detail_id
+INNER JOIN supplier AS sup on det.supplier_id = sup.id
+ORDER BY detail_expensiveness, detail_city, supplier_reliability, supplier_city, detail_name, supplier_name,
+delivery_price DESC, delivery_weight DESC;
+
+-- creating users(roles) and grant them privileges(lab7)
+
+CREATE USER economist WITH PASSWORD 'economist';
+CREATE USER director WITH PASSWORD 'director'; 
+
+CREATE ROLE economist_role;
+CREATE ROLE director_role;
+
+GRANT SELECT, INSERT, UPDATE, DELETE ON supplier, delivery, detail_delivery TO economist_role;
+GRANT SELECT ON detail, project TO economist_role;
+
+GRANT SELECT, INSERT, UPDATE, DELETE ON supplier, detail, project TO director_role;
+GRANT SELECT, DELETE ON delivery, detail_delivery TO director_role;
+
+GRANT economist_role TO economist;
+GRANT director_role TO director;
+
+-- queries(lab6)
+
+-- 1:
+SELECT * FROM supplier_for_the_economist;
+
+SELECT * FROM supplier_for_the_economist 
+WHERE reliability = 'Надежный';
+
+SELECT * FROM supplier_for_the_economist 
+WHERE reliability <> 'Надежный';
+
+-- 2:
+SELECT * FROM detail_for_the_economist;
+
+SELECT * FROM detail_for_the_economist
+WHERE expensiveness = 'Дорогая';
+
+SELECT * FROM detail_for_the_economist
+WHERE expensiveness = 'Дешевая';
+
+-- 3:
+SELECT * FROM project_for_the_economist;
+
+SELECT * FROM project_for_the_economist
+WHERE city = 'Челябинск';
+
+SELECT * FROM project_for_the_economist
+WHERE budget > 100000 and budget < 250000;
+
+-- 4:
+SELECT * FROM delivery_for_the_economist;
+
+SELECT * FROM delivery_for_the_economist
+WHERE detail_expensiveness = 'Дорогая';
+
+SELECT * FROM delivery_for_the_economist
+WHERE detail_expensiveness = 'Дешевая';
+
+SELECT * FROM delivery_for_the_economist
+WHERE supplier_reliability = 'Надежный';
+
+SELECT * FROM delivery_for_the_economist
+WHERE supplier_reliability = 'Ненадежный';
+
+SELECT * FROM delivery_for_the_economist
+WHERE delivery_price > 300 and delivery_price < 600;
+
+-- 1:
+
+SELECT supplier.*, SUM(detail.price * detail_delivery.detail_quantity) AS delivery_price FROM detail
+INNER JOIN supplier ON detail.supplier_id = supplier.id
+LEFT JOIN detail_delivery ON detail.id = detail_delivery.detail_id
+GROUP BY supplier.id
+ORDER BY supplier.id;
+
+SELECT supplier.*, SUM(detail.price * detail_delivery.detail_quantity) AS delivery_price FROM detail
+INNER JOIN supplier ON detail.supplier_id = supplier.id
+LEFT JOIN detail_delivery ON detail.id = detail_delivery.detail_id
+GROUP BY supplier.id
+HAVING supplier.rating >= (SELECT AVG(rating) from supplier)
+ORDER BY supplier.id;
+
+SELECT supplier.*, SUM(detail.price * detail_delivery.detail_quantity) AS delivery_price FROM detail
+INNER JOIN supplier ON detail.supplier_id = supplier.id
+LEFT JOIN detail_delivery ON detail.id = detail_delivery.detail_id
+GROUP BY supplier.id
+HAVING supplier.rating <= (SELECT AVG(rating) from supplier)
+ORDER BY supplier.id;
+
+SELECT supplier.*, SUM(detail.price * detail_delivery.detail_quantity) AS delivery_price FROM detail
+INNER JOIN supplier ON detail.supplier_id = supplier.id
+LEFT JOIN detail_delivery ON detail.id = detail_delivery.detail_id
+GROUP BY supplier.id
+HAVING supplier.rating = (SELECT MAX(rating) from supplier)
+ORDER BY supplier.id;
+
+SELECT supplier.*, SUM(detail.price * detail_delivery.detail_quantity) AS delivery_price FROM detail
+INNER JOIN supplier ON detail.supplier_id = supplier.id
+LEFT JOIN detail_delivery ON detail.id = detail_delivery.detail_id
+GROUP BY supplier.id
+HAVING supplier.rating = (SELECT MIN(rating) from supplier)
+ORDER BY supplier.id;
+
+-- 2:
+
+SELECT detail.*,
+(SUM(detail.price * detail_delivery.detail_quantity)) AS delivery_price
+FROM detail
+LEFT JOIN detail_delivery ON detail.id = detail_delivery.detail_id
+GROUP BY detail.id
+ORDER BY detail.id;
+
+SELECT detail.*,
+(SUM(detail.price * detail_delivery.detail_quantity)) AS delivery_price
+FROM detail
+LEFT JOIN detail_delivery ON detail.id = detail_delivery.detail_id
+GROUP BY detail.id
+HAVING detail.price >= (SELECT AVG(price) FROM detail)
+ORDER BY detail.id;
+
+SELECT detail.*,
+(SUM(detail.price * detail_delivery.detail_quantity)) AS delivery_price
+FROM detail
+LEFT JOIN detail_delivery ON detail.id = detail_delivery.detail_id
+GROUP BY detail.id
+HAVING detail.price <= (SELECT AVG(price) FROM detail)
+ORDER BY detail.id;
+
+SELECT detail.*,
+(SUM(detail.price * detail_delivery.detail_quantity)) AS delivery_price
+FROM detail
+LEFT JOIN detail_delivery ON detail.id = detail_delivery.detail_id
+GROUP BY detail.id
+HAVING detail.price = (SELECT MAX(price) FROM detail)
+ORDER BY detail.id;
+
+SELECT detail.*,
+(SUM(detail.price * detail_delivery.detail_quantity)) AS delivery_price
+FROM detail
+LEFT JOIN detail_delivery ON detail.id = detail_delivery.detail_id
+GROUP BY detail.id
+HAVING detail.price = (SELECT MIN(price) FROM detail)
+ORDER BY detail.id;
+
+-- 3:
+
+SELECT * FROM project;
+
+SELECT * FROM project
+WHERE budget >= (SELECT AVG(budget) FROM project);
+
+SELECT * FROM project
+WHERE budget <= (SELECT AVG(budget) FROM project);
+
+SELECT * FROM project
+WHERE budget = (SELECT MAX(budget) FROM project);
+
+SELECT * FROM project
+WHERE budget = (SELECT MIN(budget) FROM project);
+
+-- 4: 
+
+SELECT SUM(price) AS all_deliries_price FROM delivery;
+
+SELECT detail.expensiveness AS detail_expensiveness, SUM(detail.price * detail_delivery.detail_quantity) AS total_details_price
+FROM detail
+INNER JOIN detail_delivery on detail.id = detail_delivery.detaiL_id
+GROUP BY detail.expensiveness
+HAVING detail.expensiveness = 'Дорогая';
+
+SELECT detail.expensiveness AS detail_expensiveness, SUM(detail.price * detail_delivery.detail_quantity) AS total_details_price
+FROM detail
+INNER JOIN detail_delivery on detail.id = detail_delivery.detaiL_id
+GROUP BY detail.expensiveness
+HAVING detail.expensiveness = 'Дешевая';
+
+SELECT supplier.reliability AS supplier_reliability, SUM(detail.price * detail_delivery.detail_quantity) AS total_details_price
+FROM detail
+INNER JOIN detail_delivery on detail.id = detail_delivery.detaiL_id
+INNER JOIN supplier on supplier.id = detail.supplier_id
+GROUP BY supplier.reliability
+HAVING supplier.reliability = 'Надежный';
+
+SELECT supplier.reliability AS supplier_reliability, SUM(detail.price * detail_delivery.detail_quantity) AS total_details_price
+FROM detail
+INNER JOIN detail_delivery on detail.id = detail_delivery.detaiL_id
+INNER JOIN supplier on supplier.id = detail.supplier_id
+GROUP BY supplier.reliability
+HAVING supplier.reliability = 'Ненадежный';
+
+SELECT supplier.id AS supplier_id, SUM(detail.price * detail_delivery.detail_quantity) AS total_details_price
+FROM detail
+LEFT JOIN detail_delivery on detail.id = detail_delivery.detaiL_id
+INNER JOIN supplier on supplier.id = detail.supplier_id
+GROUP BY supplier.id
+HAVING supplier.id = 1;
+
+-- development of stored functions(additional lab2)
+
+CREATE OR REPLACE FUNCTION get_suppliers_info(search_name varchar(255), search_city varchar(255))
+	RETURNS TABLE (
+		project_id integer,
+		project_price bigint
+)
+AS $func1$
+BEGIN
+	RETURN QUERY SELECT 
+		project.id AS project_id, 
+		SUM(detail.price * detail_delivery.detail_quantity) AS project_price
+	FROM detail
+	LEFT JOIN detail_delivery ON detail_delivery.detail_id = detail.id
+	INNER JOIN supplier ON supplier.id = detail.supplier_id
+	LEFT JOIN delivery ON delivery.id = detail_delivery.delivery_id
+	LEFT JOIN project ON project.id = delivery.project_id
+	GROUP BY supplier.id, project.id
+	HAVING project.id IS NOT NULL AND supplier.name = search_name AND supplier.city = search_city;
+END
+
+$func1$ LANGUAGE plpgsql;
+
+
+SELECT * FROM get_suppliers_info(search_name => 'APEX', search_city => 'Красноярск');
+
+---------------------------------------------------------------------------------
+
+CREATE OR REPLACE FUNCTION get_suppliers(flag varchar(30))
+	RETURNS TABLE (
+		supplier_id integer,
+		supplier_name varchar(255),
+		supplier_city varchar(255),
+		supplier_address varchar(255),
+		supplier_rating smallint,
+		supplier_reliability varchar(30)		
+)
+AS $func2$
+BEGIN
+	IF flag IN ('Надежный', 'Ненадежный') THEN
+		RETURN QUERY SELECT * FROM supplier
+			WHERE reliability = flag;
+	ELSE 
+		RETURN QUERY SELECT * FROM supplier;
+	END IF;
+END
+
+$func2$ LANGUAGE plpgsql;
+
+
+SELECT * FROM get_suppliers(flag => 'Надежный');
+
+---------------------------------------------------------------------------------
+
+CREATE OR REPLACE FUNCTION get_details(flag varchar(30))
+	RETURNS TABLE (
+		detail_id integer,
+		detail_name varchar(255),
+		detail_price integer,
+		detail_weight integer,
+		detail_color colors,
+		detail_expensiveness varchar(30),
+		detail_supplier_id integer
+)
+AS $func3$
+BEGIN
+	IF flag IN ('Дорогая', 'Дешевая') THEN
+		RETURN QUERY SELECT * FROM detail
+			WHERE expensiveness = flag;
+	ELSE 
+		RETURN QUERY SELECT * FROM detail;
+	END IF;
+END
+
+$func3$ LANGUAGE plpgsql;
+
+
+SELECT * FROM get_details(flag => 'Дорогая');
