@@ -1,3 +1,4 @@
+import os
 import requests
 from api_key import API_TOKEN
 from binary_search import binary_search
@@ -12,18 +13,13 @@ app: FastAPI = FastAPI(
 )
 
 # Defining relative paths to suspicious input files.
-input_filenames: Tuple[str, ...] = (
-    "./local_files/all_queries.txt",
-    "./local_files/answers_for_questions_lab2_Linux.txt",
-    "./local_files/answers_for_questions_lab2_Parallel_processing_information.docx",
-    "./local_files/input_listOfEdgesWeighted.txt",
-    "./local_files/integral.mw",
-)
+input_directory: str = "./local_files/"
+input_filenames: List[str] = [input_directory + filename for filename in os.listdir(input_directory)]
 
 # Generating default relative paths of reports over analyzing suspicious files.
-report_folder: str = "./reports/"
+report_directory: str = "./reports/"
 report_extension: str = ".txt"
-report_filenames: Tuple[str, ...] = tuple([report_folder +
+report_filenames: Tuple[str, ...] = tuple([report_directory +
                                            input_filename[input_filename.rfind('/') + 1:input_filename.rfind('.')]
                                            + "_report" + report_extension for input_filename in input_filenames])
 
@@ -109,3 +105,7 @@ def update_report_filename(file_id: int, new_report_filename: str):
     current_file.report_filename = new_report_filename + report_extension \
         if new_report_filename[-4:] != report_extension else new_report_filename
     return {"status": 200, "updated_file": current_file}
+
+
+if __name__ == '__main__':
+    pass
